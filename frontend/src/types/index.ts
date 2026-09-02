@@ -121,6 +121,80 @@ export interface ApprovalRequest {
   comment?: string;
 }
 
+// ─── Timetable Train ─────────────────────────────────────────────────────────
+
+export type TrainType =
+  | 'PASSENGER_PREMIUM'
+  | 'PASSENGER_EXPRESS'
+  | 'PASSENGER_LOCAL'
+  | 'FREIGHT_CONTAINER'
+  | 'FREIGHT_COAL';
+
+export interface StationResponse {
+  id: number;
+  code: string;
+  name: string;
+  lat: number;
+  lng: number;
+  zone: string;
+}
+
+export interface SsoLoginRequest {
+  employee_id: string;
+  directory_domain?: string;
+  otp_code?: string;
+}
+
+export interface MfaVerifyRequest {
+  session_id: string;
+  otp_code: string;
+}
+
+export interface MfaVerifyResponse {
+  verified: boolean;
+  access_token: string;
+  user_role: UserRole;
+}
+
+export interface TrainSchedule {
+  id: number;
+  train_number: string;
+  train_name: string;
+  train_type: TrainType;
+  section_id: string;
+  scheduled_start: string; // ISO datetime
+  scheduled_end: string;   // ISO datetime
+  priority: number;       // 1 (highest) to 5
+  origin_station: string;
+  destination_station: string;
+  current_lat?: number | null;
+  current_lng?: number | null;
+  speed_kph?: number | null;
+}
+
+
+// ─── Simulation ──────────────────────────────────────────────────────────────
+
+export interface SimulationRequest {
+  scenario_id: string;
+  overrun_minutes?: number;
+  section_id?: string;
+}
+
+export interface SimulationResponse {
+  scenario_id: string;
+  success: boolean;
+  conflict_detected: boolean;
+  conflict_description: string;
+  replan_summary: string;
+  baseline_train_delay: number;
+  new_train_delay: number;
+  blocks_affected: number;
+  committed_horizon_locked: boolean;
+  uncommitted_horizon_replanned: boolean;
+  replanned_items: PlanItemResponse[];
+}
+
 // ─── Health ──────────────────────────────────────────────────────────────────
 
 export interface HealthResponse {
@@ -161,3 +235,4 @@ export interface DashboardKPIs {
   planStatus: PlanStatus | null;
   latestPlanId: number | null;
 }
+

@@ -1,15 +1,19 @@
 import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Route, BarChart2, AlertTriangle, Info } from 'lucide-react';
+import { Route, BarChart2, AlertTriangle, Info, Compass } from 'lucide-react';
 import { listTasks } from '../api/tasks';
+import { listTrains } from '../api/trains';
+import { getPlans } from '../api/plans';
+import { getStations } from '../api/gis';
+import { GisCorridorMap } from '../components/gis/GisCorridorMap';
 import { LoadingState, ErrorState, EmptyState } from '../components/ui/StateComponents';
 import { DeptBadge } from '../components/ui/Badges';
-import { uniqueSections, deptLabel } from '../utils';
+import { uniqueSections } from '../utils';
 import { clsx } from '../utils/clsx';
+import type { TrainSchedule } from '../types';
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
-// Traffic load color
 function trafficColor(load: number): string {
   if (load >= 70) return 'bg-rail-red/70 text-red-200';
   if (load >= 40) return 'bg-rail-amber/60 text-amber-200';
@@ -25,16 +29,30 @@ function trafficLabel(load: number): string {
 }
 
 export function CorridorPage() {
-  const { data: tasks = [], isLoading, error } = useQuery({
+  const { data: tasks = [], isLoading: tLoading, error } = useQuery({
     queryKey: ['tasks'],
     queryFn: listTasks,
     staleTime: 60_000,
   });
 
+  const { data: trains = [] } = useQuery<TrainSchedule[]>({
+    queryKey: ['trains'],
+    queryFn: listTrains,
+  });
+
+  const { data: plans = [] } = useQuery({
+    queryKey: ['plans'],
+    queryFn: getPlans,
+  });
+
+  const { data: stations = [] } = useQuery({
+    queryKey: ['stations'],
+    queryFn: getStations,
+  });
+
+  const activePlan = plans.length > 0 ? plans[0] : null;
   const sections = uniqueSections(tasks);
 
-  // Build a synthetic traffic heatmap from task traffic_density values
-  // Grouped by section and estimated hour-of-day impact
   const heatmap = useMemo(() => {
     const map: Record<string, Record<number, number>> = {};
     sections.forEach(s => {
@@ -42,12 +60,8 @@ export function CorridorPage() {
       HOURS.forEach(h => { map[s][h] = 0; });
     });
     tasks.forEach(task => {
-      // Use traffic_density as a baseline pressure value
-      // Maintenance tasks are typically scheduled in low-traffic windows (00:00–06:00)
-      // We simulate demand using traffic_density as peak-hour pressure
       const section = task.section_id;
       if (!map[section]) return;
-      // Peak hours 06:00–22:00, off-peak 22:00–06:00
       HOURS.forEach(h => {
         const isPeak = h >= 6 && h <= 22;
         const contribution = isPeak ? task.traffic_density * 0.8 : task.traffic_density * 0.15;
@@ -57,40 +71,38 @@ export function CorridorPage() {
     return map;
   }, [tasks, sections]);
 
-  if (isLoading) return <div className="p-8"><LoadingState label="Loading corridor data…" /></div>;
+  if (tLoading) return <div className="p-8"><LoadingState label="Loading GIS Corridor Intelligence…" /></div>;
   if (error) return <div className="p-8"><ErrorState message="Failed to load task data." /></div>;
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px]">
+    <div className="p-6 space-y-6 max-w-[1500px]">
       <div>
         <h1 className="page-title flex items-center gap-2">
-          <Route size={20} className="text-rail-blue" />
-          Traffic & Corridor Intelligence
+          <Route size={22} className="text-rail-blue" />
+          Traffic & Geographic GIS Corridor Intelligence
         </h1>
         <p className="page-subtitle mt-1">
-          Section-level traffic density derived from maintenance task data.
-          The optimizer selects block windows in low-traffic periods.
+          Geographic Indian Railways track topology with live train GPS coordinates & section-level capacity heatmaps.
         </p>
       </div>
 
-      {/* Info callout */}
-      <div className="alert-info">
-        <Info size={14} className="text-rail-blue mt-0.5 flex-shrink-0" />
-        <div>
-          <p className="text-xs font-semibold text-rail-blue">Note on Traffic Data</p>
-          <p className="text-xs text-gray-400 mt-0.5">
-            This heatmap is derived from the <code>traffic_density</code> field on maintenance tasks.
-            The backend does not have a separate train timetable or live traffic API.
-            The optimizer uses this same field when minimizing traffic impact during block assignment.
-          </p>
-        </div>
+      {/* Hero Geographic GIS Map Overlay */}
+      <div className="space-y-3">
+        <h2 className="text-base font-bold text-gray-100 flex items-center gap-2">
+          <Compass className="w-5 h-5 text-cyan-400" />
+          Interactive GIS Track Topography & Live GPS Network
+        </h2>
+        <GisCorridorMap 
+          stations={stations} 
+          trains={trains} 
+          tasks={tasks} 
+          planItems={activePlan?.items ?? []} 
+        />
       </div>
 
-      {sections.length === 0 ? (
-        <div className="card"><EmptyState title="No sections found" description="Add maintenance tasks to see section data." /></div>
-      ) : (
+      {sections.length > 0 && (
         <>
-          {/* Section cards */}
+          {/* Section summary cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {sections.map(section => {
               const sectionTasks = tasks.filter(t => t.section_id === section);
@@ -101,14 +113,14 @@ export function CorridorPage() {
               const criticalCount = sectionTasks.filter(t => t.severity === 5).length;
 
               return (
-                <div key={section} className="card p-4 space-y-3">
+                <div key={section} className="card p-4 space-y-3 bg-navy-900/90 border border-surface-border">
                   <div className="flex items-start justify-between">
                     <div>
-                      <h3 className="text-sm font-bold text-gray-200">{section}</h3>
-                      <p className="text-xs text-gray-500">{sectionTasks.length} maintenance task{sectionTasks.length !== 1 ? 's' : ''}</p>
+                      <h3 className="text-sm font-bold text-gray-100 font-mono">{section}</h3>
+                      <p className="text-xs text-gray-400">{sectionTasks.length} maintenance task{sectionTasks.length !== 1 ? 's' : ''}</p>
                     </div>
                     <div className={clsx(
-                      'px-2 py-1 rounded text-xs font-semibold',
+                      'px-2 py-1 rounded text-xs font-bold',
                       avgDensity >= 70 ? 'bg-rail-red/15 text-rail-red' :
                       avgDensity >= 40 ? 'bg-rail-amber/15 text-rail-amber' :
                       'bg-rail-green/15 text-rail-green'
@@ -117,11 +129,10 @@ export function CorridorPage() {
                     </div>
                   </div>
 
-                  {/* Traffic bar */}
                   <div>
-                    <div className="flex justify-between text-[10px] text-gray-500 mb-1">
-                      <span>Avg Traffic Density</span>
-                      <span>{avgDensity}/100</span>
+                    <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                      <span>Traffic Capacity Load</span>
+                      <span className="font-mono">{avgDensity}/100</span>
                     </div>
                     <div className="score-bar-bg">
                       <div
@@ -131,12 +142,11 @@ export function CorridorPage() {
                     </div>
                   </div>
 
-                  {/* Department breakdown */}
                   <div className="flex flex-wrap gap-1.5">
                     {depts.map(d => (
                       <div key={d} className="flex items-center gap-1">
                         <DeptBadge dept={d} />
-                        <span className="text-[10px] text-gray-500">
+                        <span className="text-[10px] text-gray-400">
                           ({sectionTasks.filter(t => t.department === d).length})
                         </span>
                       </div>
@@ -144,8 +154,8 @@ export function CorridorPage() {
                   </div>
 
                   {criticalCount > 0 && (
-                    <div className="flex items-center gap-1.5 text-xs text-rail-red">
-                      <AlertTriangle size={11} />
+                    <div className="flex items-center gap-1.5 text-xs text-rail-red font-semibold">
+                      <AlertTriangle size={12} />
                       {criticalCount} critical task{criticalCount > 1 ? 's' : ''}
                     </div>
                   )}
@@ -155,33 +165,31 @@ export function CorridorPage() {
           </div>
 
           {/* Traffic heatmap */}
-          <div className="card overflow-hidden">
+          <div className="card overflow-hidden bg-navy-900/90 border border-surface-border">
             <div className="px-4 py-3 border-b border-surface-border flex items-center gap-2">
-              <BarChart2 size={14} className="text-gray-400" />
-              <h2 className="text-sm font-semibold text-gray-200">Traffic Density Heatmap by Section × Time-of-Day</h2>
+              <BarChart2 size={16} className="text-rail-blue" />
+              <h2 className="text-sm font-bold text-gray-100">Traffic Density Heatmap by Section × Time-of-Day</h2>
             </div>
             <div className="overflow-x-auto p-4">
               <div className="min-w-[700px]">
-                {/* Hour labels */}
                 <div className="flex mb-2 pl-32">
                   {HOURS.filter(h => h % 2 === 0).map(h => (
-                    <div key={h} className="flex-1 text-[10px] text-gray-600 font-tabular text-center">
-                      {String(h).padStart(2, '0')}
+                    <div key={h} className="flex-1 text-[10px] text-gray-400 font-tabular text-center">
+                      {String(h).padStart(2, '0')}:00
                     </div>
                   ))}
                 </div>
 
-                {/* Rows */}
                 {sections.map(section => (
                   <div key={section} className="flex items-center mb-1.5">
-                    <div className="w-32 text-[10px] text-gray-400 truncate pr-2">{section}</div>
+                    <div className="w-32 text-[10px] font-mono text-gray-300 truncate pr-2">{section}</div>
                     <div className="flex flex-1 gap-px">
                       {HOURS.map(h => {
                         const load = Math.round(heatmap[section]?.[h] ?? 0);
                         return (
                           <div
                             key={h}
-                            title={`${section} ${String(h).padStart(2,'0')}:00 — Traffic: ${load}`}
+                            title={`${section} ${String(h).padStart(2,'0')}:00 — Traffic Load: ${load}`}
                             className={clsx('flex-1 h-8 rounded-sm text-[8px] flex items-center justify-center font-semibold', trafficColor(load))}
                           >
                             {h % 4 === 0 ? trafficLabel(load) : ''}
@@ -191,24 +199,6 @@ export function CorridorPage() {
                     </div>
                   </div>
                 ))}
-
-                {/* Legend */}
-                <div className="flex items-center gap-4 mt-3 pt-3 border-t border-surface-border">
-                  {[
-                    { label: 'MINIMAL', cls: 'bg-rail-green/30' },
-                    { label: 'LOW', cls: 'bg-rail-blue/40' },
-                    { label: 'MEDIUM', cls: 'bg-rail-amber/60' },
-                    { label: 'HIGH', cls: 'bg-rail-red/70' },
-                  ].map(({ label, cls }) => (
-                    <div key={label} className="flex items-center gap-1.5">
-                      <div className={clsx('w-4 h-4 rounded-sm', cls)} />
-                      <span className="text-[10px] text-gray-500">{label}</span>
-                    </div>
-                  ))}
-                  <span className="text-[10px] text-gray-600 ml-auto">
-                    Derived from task traffic_density field
-                  </span>
-                </div>
               </div>
             </div>
           </div>

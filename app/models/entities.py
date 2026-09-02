@@ -92,6 +92,42 @@ class PlanItem(Base):
     plan: Mapped[BlockPlan] = relationship(back_populates="items")
 
 
+class TrainType(str, enum.Enum):
+    PASSENGER_PREMIUM = "PASSENGER_PREMIUM"  # Vande Bharat, Rajdhani, Shatabdi
+    PASSENGER_EXPRESS = "PASSENGER_EXPRESS"  # Mail / Express
+    PASSENGER_LOCAL = "PASSENGER_LOCAL"      # Suburban / MEMU
+    FREIGHT_CONTAINER = "FREIGHT_CONTAINER"  # Container Rake
+    FREIGHT_COAL = "FREIGHT_COAL"            # Bulk Coal / Iron Ore Rake
+
+
+class TrainSchedule(Base):
+    __tablename__ = "train_schedules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    train_number: Mapped[str] = mapped_column(String(50), index=True)
+    train_name: Mapped[str] = mapped_column(String(120))
+    train_type: Mapped[TrainType] = mapped_column(Enum(TrainType))
+    section_id: Mapped[str] = mapped_column(String(100), index=True)
+    scheduled_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    scheduled_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    priority: Mapped[int] = mapped_column(Integer, default=1)  # 1 (Highest, e.g., Vande Bharat) to 5 (Freight)
+    origin_station: Mapped[str] = mapped_column(String(50))
+    destination_station: Mapped[str] = mapped_column(String(50))
+    current_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    current_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    speed_kph: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class Station(Base):
+    __tablename__ = "stations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    lat: Mapped[float] = mapped_column(Float)
+    lng: Mapped[float] = mapped_column(Float)
+    zone: Mapped[str] = mapped_column(String(50), default="NR")
+
+
+
 class Approval(Base):
     __tablename__ = "approvals"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -100,3 +136,4 @@ class Approval(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole))
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+

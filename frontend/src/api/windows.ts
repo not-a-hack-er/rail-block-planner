@@ -1,10 +1,13 @@
 import apiClient from './client';
-import type { WindowCreate } from '../types';
+import type { WindowCreate, BlockWindow } from '../types';
 
 export async function createWindow(data: WindowCreate): Promise<{ id: number }> {
   const res = await apiClient.post<{ id: number }>('/windows', data);
   return res.data;
 }
 
-// NOTE: Backend has no GET /windows endpoint.
-// Windows created during a session are stored in localStorage by the UI layer.
+export async function getWindows(): Promise<BlockWindow[]> {
+  const res = await apiClient.get<BlockWindow[]>('/windows');
+  return res.data;
+}
+

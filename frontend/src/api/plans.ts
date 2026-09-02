@@ -21,9 +21,16 @@ export async function publishPlan(planId: number): Promise<PlanResponse> {
   return res.data;
 }
 
-// ─── Plan ID history in localStorage ────────────────────────────────────────
-// NOTE: Backend has no GET /plans (list) endpoint.
-// We track plan IDs locally and fetch individually.
+export async function getPlans(): Promise<PlanResponse[]> {
+  const res = await apiClient.get<PlanResponse[]>('/plans');
+  return res.data;
+}
+
+export async function seedDatabase(): Promise<{ status: string; message: string }> {
+  const res = await apiClient.post<{ status: string; message: string }>('/seed', {});
+  return res.data;
+}
+
 
 const PLAN_HISTORY_KEY = 'rail_plan_history';
 

@@ -5,14 +5,15 @@ import {
   RefreshCw, Zap, TrendingDown, Clock
 } from 'lucide-react';
 import { listTasks } from '../api/tasks';
-import { getPlan, getLatestPlanId } from '../api/plans';
+import { getPlan, getPlans, getLatestPlanId } from '../api/plans';
+import { listTrains } from '../api/trains';
 import { KpiCard } from '../components/ui/KpiCard';
 import { AlertBanner } from '../components/ui/StateComponents';
 import { LoadingState, ErrorState } from '../components/ui/StateComponents';
 import { DeptBadge, SeverityBadge, ScoreBar, StatusBadge } from '../components/ui/Badges';
 import { formatDateTime, durationLabel, daysUntilDue, isOverdue, uniqueSections } from '../utils';
 import { CorridorTimeline } from '../components/timeline/CorridorTimeline';
-import type { MaintenanceTask } from '../types';
+import type { MaintenanceTask, TrainSchedule } from '../types';
 
 export function CommandCenter() {
   const { data: tasks = [], isLoading: tasksLoading, error: tasksError, refetch } = useQuery({
@@ -21,12 +22,18 @@ export function CommandCenter() {
     staleTime: 60_000,
   });
 
-  const latestPlanId = getLatestPlanId();
-  const { data: plan, isLoading: planLoading } = useQuery({
-    queryKey: ['plan', latestPlanId],
-    queryFn: () => getPlan(latestPlanId!),
-    enabled: latestPlanId !== null,
+  const { data: plans = [], isLoading: planLoading } = useQuery({
+    queryKey: ['plans'],
+    queryFn: getPlans,
     staleTime: 60_000,
+  });
+
+  const plan = plans.length > 0 ? plans[0] : null;
+  const latestPlanId = plan?.id ?? null;
+
+  const { data: trains = [] } = useQuery<TrainSchedule[]>({
+    queryKey: ['trains'],
+    queryFn: listTrains,
   });
 
   const criticalTasks = tasks.filter(t => t.severity === 5);
@@ -119,7 +126,7 @@ export function CommandCenter() {
               {uniqueSections(tasks).length} section{uniqueSections(tasks).length !== 1 ? 's' : ''}
             </div>
           </div>
-          <CorridorTimeline tasks={tasks} planItems={plan?.items ?? []} />
+          <CorridorTimeline tasks={tasks} planItems={plan?.items ?? []} trains={trains} />
         </div>
 
         {/* Alerts */}
