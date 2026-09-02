@@ -1,90 +1,140 @@
-import React, { useState } from 'react';
-import { format } from 'date-fns';
-import { Bell, Monitor, Database, Wifi, WifiOff, Presentation } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
-import { checkHealth } from '../../api/health';
-import { clsx } from '../../utils/clsx';
+﻿import React, { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Train, Loader2, Maximize2, Minimize2 } from "lucide-react";
+import { checkHealth } from "../../api/health";
+import { useAuth } from "../../contexts/AuthContext";
+import { clsx } from "../../utils/clsx";
+
+const ROLE_LABELS: Record<string, string> = {
+  ADMIN: "Administrator",
+  SENIOR_DOM: "Sr. DOM",
+  PLANNER: "Section Planner",
+  DEPARTMENT_APPROVER: "Dept. Approver",
+};
+
+const ROLE_COLORS: Record<string, string> = {
+  ADMIN: "text-red-400",
+  SENIOR_DOM: "text-rail-blue",
+  PLANNER: "text-emerald-400",
+  DEPARTMENT_APPROVER: "text-amber-400",
+};
+
+function useISTClock() {
+  const [time, setTime] = useState<string>("");
+  const [dateStr, setDateStr] = useState<string>("");
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      setTime(
+        now.toLocaleTimeString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        })
+      );
+      setDateStr(
+        now.toLocaleDateString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        })
+      );
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return { time, dateStr };
+}
 
 interface TopBarProps {
-  presentationMode: boolean;
-  onTogglePresentation: () => void;
+  presentationMode?: boolean;
+  onTogglePresentation?: () => void;
 }
 
 export function TopBar({ presentationMode, onTogglePresentation }: TopBarProps) {
-  const { data: health, isError } = useQuery({
-    queryKey: ['health'],
+  const { time, dateStr } = useISTClock();
+  const { user } = useAuth();
+
+  const { data: health, isLoading, isError } = useQuery({
+    queryKey: ["health"],
     queryFn: checkHealth,
-    refetchInterval: 30000,
+    refetchInterval: 15_000,
     retry: 1,
   });
 
-  const isConnected = health?.status === 'ok' && !isError;
-  const now = format(new Date(), 'dd MMM yyyy');
+  const isConnected = health?.status === "ok" && !isError;
 
   return (
-    <header className="topbar h-[52px] bg-navy-800 border-b border-surface-border flex items-center justify-between px-6 flex-shrink-0">
-      {/* Left: Planning context */}
-      <div className="flex items-center gap-6">
+    <header className="h-10 bg-navy-800 border-b border-surface-border flex items-center justify-between px-4 shrink-0 z-30">
+      {/* Left — Branding */}
+      <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
-          <span className="section-title text-[10px]">Planning Horizon</span>
-          <span className="text-xs font-semibold text-gray-200">Weekly Plan — {now}</span>
+          <Train size={13} className="text-rail-blue" />
+          <span className="text-[11px] font-bold text-white tracking-wide">RAILOPT</span>
+          <span className="text-[11px] text-gray-600">|</span>
+          <span className="hidden lg:inline text-[11px] text-gray-400">North Central Railway — Prayagraj Division</span>
         </div>
-        <div className="h-3 w-px bg-surface-border" />
-        <div className="flex items-center gap-2">
-          <span className="section-title text-[10px]">Corridor</span>
-          <span className="text-xs text-gray-300">All Corridors</span>
-        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 font-bold tracking-wide">
+          SIH 2026
+        </span>
       </div>
 
-      {/* Right: Status + controls */}
-      <div className="flex items-center gap-4">
+      {/* Right — Status + clock */}
+      <div className="flex items-center gap-3">
         {/* Backend status */}
-        <div className="flex items-center gap-2">
-          {isConnected ? (
+        <div className="flex items-center gap-1.5">
+          {isLoading ? (
             <>
-              <div className="w-1.5 h-1.5 rounded-full bg-rail-green animate-pulse-slow" />
-              <span className="text-[11px] text-gray-400">Backend Connected</span>
+              <Loader2 size={10} className="text-gray-500 animate-spin" />
+              <span className="text-[10px] text-gray-500">Connecting…</span>
+            </>
+          ) : isConnected ? (
+            <>
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[10px] text-emerald-400 font-semibold">API LIVE</span>
             </>
           ) : (
             <>
               <div className="w-1.5 h-1.5 rounded-full bg-rail-red" />
-              <span className="text-[11px] text-rail-red">Backend Unreachable</span>
+              <span className="text-[10px] text-rail-red font-semibold">OFFLINE</span>
             </>
           )}
         </div>
 
-        <div className="h-3 w-px bg-surface-border" />
+        {/* Separator */}
+        <div className="w-px h-4 bg-surface-border" />
 
-        {/* Data mode */}
-        <div className="flex items-center gap-1.5">
-          <Database size={11} className="text-gray-500" />
-          <span className="text-[11px] text-gray-500">DEMO ENVIRONMENT</span>
+        {/* User role */}
+        {user && (
+          <div className="hidden sm:flex items-center gap-1.5">
+            <span className={clsx("text-[10px] font-bold", ROLE_COLORS[user.role] ?? "text-gray-400")}>
+              {ROLE_LABELS[user.role] ?? user.role}
+            </span>
+          </div>
+        )}
+
+        {/* IST Clock */}
+        <div className="flex items-center gap-1 bg-navy-900 border border-surface-border rounded px-2 py-0.5">
+          <span className="hidden md:inline text-[10px] text-gray-600">{dateStr}</span>
+          {dateStr && <span className="hidden md:inline text-[10px] text-gray-700">·</span>}
+          <span className="text-[10px] font-mono font-bold text-gray-200 tabular-nums">{time}</span>
+          <span className="text-[9px] text-gray-600 ml-0.5">IST</span>
         </div>
 
-        <div className="h-3 w-px bg-surface-border" />
-
-        {/* Presentation mode */}
-        <button
-          onClick={onTogglePresentation}
-          className={clsx(
-            'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all border',
-            presentationMode
-              ? 'bg-rail-blue/20 border-rail-blue/30 text-rail-blue'
-              : 'border-surface-border text-gray-400 hover:text-gray-200 hover:border-gray-600'
-          )}
-          title="Toggle presentation mode"
-        >
-          <Monitor size={12} />
-          <span>{presentationMode ? 'Exit Presentation' : 'Present'}</span>
-        </button>
-
-        {/* Role badge */}
-        <div className="badge badge-blue text-[10px]">Control Office</div>
-
-        {/* Trust label */}
-        <div className="text-[10px] text-gray-600 hidden xl:block">
-          Decision Support • Human-in-the-loop
-        </div>
+        {/* Presentation mode toggle */}
+        {onTogglePresentation && (
+          <button
+            onClick={onTogglePresentation}
+            className="btn-icon w-7 h-7 text-gray-500 hover:text-gray-200"
+            title={presentationMode ? "Exit Presentation Mode" : "Enter Presentation Mode"}
+          >
+            {presentationMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+          </button>
+        )}
       </div>
     </header>
   );

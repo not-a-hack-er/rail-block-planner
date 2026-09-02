@@ -418,10 +418,24 @@ function PlanResultPanel({
 
         {/* Metrics Bar */}
         <div className="grid grid-cols-4 gap-3 mt-3">
-          <Metric label="Tasks Scheduled" value={plan.scheduled_count} color="green" />
-          <Metric label="Unscheduled Tasks" value={plan.unscheduled_task_ids.length} color={plan.unscheduled_task_ids.length > 0 ? 'amber' : 'green'} />
-          <Metric label="Active Corridors" value={sections.length} color="blue" />
-          <Metric label="Track Hours Saved" value={3.5} unit="hrs" color="purple" />
+          {(() => {
+            // Group plan items by window — count windows with multiple tasks (consolidation)
+            const windowTaskMap = new Map<number, number>();
+            plan.items.forEach(i => windowTaskMap.set(i.window_id, (windowTaskMap.get(i.window_id) ?? 0) + 1));
+            const consolidatedWindows = [...windowTaskMap.values()].filter(c => c > 1).length;
+            // Track hours saved: estimate 45min avg per extra possession eliminated
+            const hoursSaved = parseFloat(((plan.scheduled_count - (windowTaskMap.size)) * 0.75).toFixed(1));
+            // Efficiency %: compare windows used vs tasks scheduled
+            const efficiencyGain = plan.scheduled_count > 0 ? Math.round((1 - windowTaskMap.size / plan.scheduled_count) * 100) : 0;
+            return (
+              <>
+                <Metric label="Tasks Scheduled" value={plan.scheduled_count} color="green" />
+                <Metric label="Unscheduled Tasks" value={plan.unscheduled_task_ids.length} color={plan.unscheduled_task_ids.length > 0 ? 'amber' : 'green'} />
+                <Metric label="Consolidated Windows" value={consolidatedWindows} color="blue" />
+                <Metric label="Track Hours Saved" value={Math.max(0, hoursSaved)} unit="hrs" color="purple" />
+              </>
+            );
+          })()}
         </div>
       </div>
 
@@ -432,9 +446,18 @@ function PlanResultPanel({
             <Layers className="w-5 h-5 text-purple-400" />
             <h3 className="text-sm font-bold text-gray-100">Multi-Department Consolidation Showcase</h3>
           </div>
-          <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20">
-            46% Possession Efficiency Gain
-          </span>
+          {(() => {
+            const windowTaskMap = new Map<number, number>();
+            plan.items.forEach(i => windowTaskMap.set(i.window_id, (windowTaskMap.get(i.window_id) ?? 0) + 1));
+            const efficiencyPct = plan.scheduled_count > 0 
+              ? Math.round((1 - windowTaskMap.size / plan.scheduled_count) * 100) 
+              : 0;
+            return (
+              <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20">
+                {Math.max(0, efficiencyPct)}% Possession Efficiency Gain
+              </span>
+            );
+          })()}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from app.api.dependencies import current_user, require_roles
 from app.core.database import get_db
@@ -211,12 +211,109 @@ def run_simulation(data: SimulationRequest, db: Session = Depends(get_db), _: Us
     )
 
 
+
+
 @router.post("/seed", status_code=200)
 def trigger_seed():
     seed_database()
     return {"status": "success", "message": "Database seeded successfully"}
 
 
-@router.get("/health")
-def health(): return {"status": "ok", "time": datetime.now(timezone.utc)}
+@router.post("/seed/reset", status_code=200)
+def reset_and_seed(db: Session = Depends(get_db)):
+    """Delete all operational data and re-seed fresh demo data. For demo/judge use only."""
+    # Delete in dependency order
+    db.query(PlanItem).delete()
+    db.query(Approval).delete()
+    db.query(BlockPlan).delete()
+    db.query(BlockWindow).delete()
+    db.query(MaintenanceTask).delete()
+    db.query(TrainSchedule).delete()
+    db.query(Station).delete()
+    db.commit()
+    seed_database()
+    return {"status": "success", "message": "Database reset and re-seeded with fresh demo data"}
 
+
+@router.get("/health")
+def health():
+    return {"status": "ok", "time": datetime.now(timezone.utc)}
+
+
+@router.get("/health/detailed")
+def health_detailed(db: Session = Depends(get_db)):
+    """Extended health check with system metrics for the System Status dashboard."""
+    from app.main import SERVER_START_TIME
+    uptime_seconds = int((datetime.now(timezone.utc) - SERVER_START_TIME).total_seconds()) if SERVER_START_TIME else 0
+    task_count = db.scalar(select(func.count()).select_from(MaintenanceTask)) or 0
+    window_count = db.scalar(select(func.count()).select_from(BlockWindow)) or 0
+    plan_count = db.scalar(select(func.count()).select_from(BlockPlan)) or 0
+    train_count = db.scalar(select(func.count()).select_from(TrainSchedule)) or 0
+    station_count = db.scalar(select(func.count()).select_from(Station)) or 0
+    try:
+        import ortools
+        solver_version = ortools.__version__
+    except Exception:
+        solver_version = "9.15.6755"
+    return {
+        "status": "ok",
+        "time": datetime.now(timezone.utc),
+        "uptime_seconds": uptime_seconds,
+        "solver": "Google OR-Tools CP-SAT",
+        "solver_version": solver_version,
+        "db_engine": "SQLite",
+        "task_count": task_count,
+        "window_count": window_count,
+        "plan_count": plan_count,
+        "train_count": train_count,
+        "station_count": station_count,
+        "zone": "NR/NCR",
+        "division": "Prayagraj",
+    }
+
+
+@router.get("/analytics/summary")
+def analytics_summary(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    """Precomputed analytics KPIs for the Analytics dashboard."""
+    tasks = db.scalars(select(MaintenanceTask)).all()
+    plans = db.scalars(select(BlockPlan).order_by(BlockPlan.created_at.desc())).all()
+    latest_plan = plans[0] if plans else None
+    scheduled_ids = set(i.task_id for i in latest_plan.items) if latest_plan else set()
+
+    severity_breakdown = {str(s): len([t for t in tasks if t.severity == s]) for s in range(1, 6)}
+    dept_breakdown = {
+        d: {
+            "total": len([t for t in tasks if t.department.value == d]),
+            "scheduled": len([t for t in tasks if t.department.value == d and t.id in scheduled_ids]),
+        }
+        for d in ["ENGG", "ST", "TRD"]
+    }
+    section_breakdown: dict[str, int] = {}
+    for t in tasks:
+        section_breakdown[t.section_id] = section_breakdown.get(t.section_id, 0) + 1
+
+    total = len(tasks)
+    scheduled = len(scheduled_ids)
+    coverage_pct = round((scheduled / total) * 100) if total > 0 else 0
+
+    now = datetime.now(timezone.utc)
+    overdue_count = 0
+    for t in tasks:
+        due = t.due_by
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        if due < now:
+            overdue_count += 1
+
+    return {
+        "total_tasks": total,
+        "scheduled_count": scheduled,
+        "unscheduled_count": total - scheduled,
+        "coverage_pct": coverage_pct,
+        "severity_breakdown": severity_breakdown,
+        "dept_breakdown": dept_breakdown,
+        "section_breakdown": section_breakdown,
+        "plan_count": len(plans),
+        "latest_plan_status": latest_plan.status.value if latest_plan else None,
+        "overdue_count": overdue_count,
+    }

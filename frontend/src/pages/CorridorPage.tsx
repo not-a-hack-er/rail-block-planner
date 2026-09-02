@@ -38,6 +38,7 @@ export function CorridorPage() {
   const { data: trains = [] } = useQuery<TrainSchedule[]>({
     queryKey: ['trains'],
     queryFn: listTrains,
+    refetchInterval: 15_000,
   });
 
   const { data: plans = [] } = useQuery({

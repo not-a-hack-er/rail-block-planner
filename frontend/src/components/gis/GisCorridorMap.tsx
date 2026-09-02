@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import L from 'leaflet';
 import {
   Train, Zap, MapPin, Compass, AlertTriangle,
-  CheckCircle2, Clock, Layers, Eye, EyeOff, Activity, ShieldCheck
+  CheckCircle2, Clock, Layers, Eye, EyeOff, Activity, ShieldCheck,
+  Search, Globe, Radio, Maximize2, RefreshCw, Cpu
 } from 'lucide-react';
 import type { StationResponse, TrainSchedule, MaintenanceTask, PlanItemResponse } from '../../types';
 import { clsx } from '../../utils/clsx';
@@ -13,38 +15,84 @@ interface GisCorridorMapProps {
   planItems?: PlanItemResponse[];
 }
 
-// ----- Hardcoded station layout positions (percentage of SVG canvas) -----
-// Arranged to look like the actual NR Delhi-UP corridor geography:
-//   NDLS (left) → GZB (center-left) → MTC (top) branching off to CNB → PRYJ (right)
-const STATION_LAYOUT: Record<string, { x: number; y: number; label: string; code: string; zone: string }> = {
-  NDLS: { x: 12, y: 45, label: 'New Delhi', code: 'NDLS', zone: 'NR' },
-  GZB:  { x: 35, y: 45, label: 'Ghaziabad', code: 'GZB',  zone: 'NR' },
-  MTC:  { x: 50, y: 20, label: 'Meerut City', code: 'MTC', zone: 'NR' },
-  CNB:  { x: 65, y: 55, label: 'Kanpur Central', code: 'CNB', zone: 'NCR' },
-  PRYJ: { x: 88, y: 62, label: 'Prayagraj Jn', code: 'PRYJ', zone: 'NCR' },
+// ── Geographic Station Coordinates (Northern Railway / NCR Corridor) ─────────
+export interface StationGeo {
+  code: string;
+  name: string;
+  lat: number;
+  lng: number;
+  zone: string;
+  xSvg: number;
+  ySvg: number;
+}
+
+export const REAL_STATIONS: Record<string, StationGeo> = {
+  NDLS: { code: 'NDLS', name: 'New Delhi Junction',       lat: 28.6431, lng: 77.2197, zone: 'NR',  xSvg: 12, ySvg: 45 },
+  DLI:  { code: 'DLI',  name: 'Old Delhi Junction',        lat: 28.6617, lng: 77.2300, zone: 'NR',  xSvg: 14, ySvg: 38 },
+  ANVT: { code: 'ANVT', name: 'Anand Vihar Terminal',     lat: 28.6469, lng: 77.3150, zone: 'NR',  xSvg: 25, ySvg: 44 },
+  GZB:  { code: 'GZB',  name: 'Ghaziabad Junction',       lat: 28.6652, lng: 77.4385, zone: 'NR',  xSvg: 35, ySvg: 45 },
+  MTC:  { code: 'MTC',  name: 'Meerut City Junction',     lat: 28.9800, lng: 77.7064, zone: 'NR',  xSvg: 50, ySvg: 20 },
+  ALJN: { code: 'ALJN', name: 'Aligarh Junction',         lat: 27.8922, lng: 78.0706, zone: 'NCR', xSvg: 55, ySvg: 52 },
+  TDL:  { code: 'TDL',  name: 'Tundla Junction',          lat: 27.2064, lng: 78.2393, zone: 'NCR', xSvg: 60, ySvg: 54 },
+  CNB:  { code: 'CNB',  name: 'Kanpur Central',           lat: 26.4542, lng: 80.3507, zone: 'NCR', xSvg: 65, ySvg: 55 },
+  PRYJ: { code: 'PRYJ', name: 'Prayagraj Junction',       lat: 25.4358, lng: 81.8463, zone: 'NCR', xSvg: 88, ySvg: 62 },
 };
 
-// Track corridors connecting stations
-const CORRIDORS = [
-  { id: 'NDLS-GZB-UP',  from: 'NDLS', to: 'GZB',  label: 'NDLS–GZB UP',  color: '#3b82f6', dashOffset: 0 },
-  { id: 'GZB-NDLS-DN',  from: 'GZB',  to: 'NDLS', label: 'GZB–NDLS DN',  color: '#8b5cf6', dashOffset: -6 },
-  { id: 'GZB-MTC-UP',   from: 'GZB',  to: 'MTC',  label: 'GZB–MTC UP',   color: '#10b981', dashOffset: 0 },
-  { id: 'GZB-CNB-MAIN', from: 'GZB',  to: 'CNB',  label: 'GZB–CNB Main', color: '#f59e0b', dashOffset: 0 },
-  { id: 'CNB-PRYJ-DN',  from: 'CNB',  to: 'PRYJ', label: 'CNB–PRYJ',     color: '#06b6d4', dashOffset: 0 },
+// Track Corridor Polylines connecting geographic station waypoints
+export const CORRIDORS_GEO = [
+  {
+    id: 'NDLS-GZB-UP',
+    label: 'NDLS–GZB UP',
+    color: '#3b82f6',
+    from: 'NDLS',
+    to: 'GZB',
+    pathLat5: [[28.6431, 77.2197], [28.6469, 77.3150], [28.6652, 77.4385]] as [number, number][],
+  },
+  {
+    id: 'GZB-NDLS-DN',
+    label: 'GZB–NDLS DN',
+    color: '#8b5cf6',
+    from: 'GZB',
+    to: 'NDLS',
+    pathLat5: [[28.6652, 77.4385], [28.6469, 77.3150], [28.6431, 77.2197]] as [number, number][],
+  },
+  {
+    id: 'NDLS-MTC-UP',
+    label: 'GZB–MTC UP',
+    color: '#10b981',
+    from: 'GZB',
+    to: 'MTC',
+    pathLat5: [[28.6652, 77.4385], [28.9800, 77.7064]] as [number, number][],
+  },
+  {
+    id: 'GZB-CNB-MAIN',
+    label: 'GZB–CNB Main',
+    color: '#f59e0b',
+    from: 'GZB',
+    to: 'CNB',
+    pathLat5: [[28.6652, 77.4385], [27.8922, 78.0706], [27.2064, 78.2393], [26.4542, 80.3507]] as [number, number][],
+  },
+  {
+    id: 'CNB-PRYJ-DN',
+    label: 'CNB–PRYJ',
+    color: '#06b6d4',
+    from: 'CNB',
+    to: 'PRYJ',
+    pathLat5: [[26.4542, 80.3507], [25.4358, 81.8463]] as [number, number][],
+  },
 ];
 
-// Train positions: lerp between from/to station positions
 const TRAIN_SECTION_MAP: Record<string, string> = {
   'NDLS-GZB-UP': 'NDLS-GZB-UP',
   'GZB-NDLS-DN': 'GZB-NDLS-DN',
-  'NDLS-MTC-UP': 'GZB-MTC-UP',
+  'NDLS-MTC-UP': 'NDLS-MTC-UP',
   'NDLS-GZB-DN': 'GZB-NDLS-DN',
 };
 
 const DEPT_COLORS: Record<string, { fill: string; stroke: string; label: string }> = {
-  ENGG: { fill: 'rgba(59,130,246,0.25)', stroke: '#3b82f6', label: 'Engineering' },
-  TRD:  { fill: 'rgba(245,158,11,0.25)', stroke: '#f59e0b', label: 'Traction (TRD)' },
-  ST:   { fill: 'rgba(139,92,246,0.25)', stroke: '#8b5cf6', label: 'Signal & Telecom' },
+  ENGG: { fill: 'rgba(59,130,246,0.3)', stroke: '#3b82f6', label: 'Engineering' },
+  TRD:  { fill: 'rgba(245,158,11,0.3)', stroke: '#f59e0b', label: 'Traction (TRD)' },
+  ST:   { fill: 'rgba(139,92,246,0.3)', stroke: '#8b5cf6', label: 'Signal & Telecom' },
 };
 
 const TRAIN_COLORS: Record<string, string> = {
@@ -55,75 +103,329 @@ const TRAIN_COLORS: Record<string, string> = {
   FREIGHT_COAL:       '#f97316',
 };
 
+// Map Tile Providers
+export type MapProvider = 'cartodb_dark' | 'openrailwaymap' | 'esri_satellite' | 'osm_standard' | 'schematic';
+
+interface MapProviderOption {
+  id: MapProvider;
+  name: string;
+  tileUrl?: string;
+  overlayUrl?: string;
+  attribution?: string;
+  badge: string;
+  description: string;
+}
+
+const MAP_PROVIDERS: MapProviderOption[] = [
+  {
+    id: 'cartodb_dark',
+    name: 'CartoDB Dark (Default)',
+    tileUrl: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap',
+    badge: 'DARK CONTROL ROOM',
+    description: 'High-contrast dark vector map optimized for operational command centers.',
+  },
+  {
+    id: 'openrailwaymap',
+    name: 'OpenRailwayMap Live Tracks',
+    tileUrl: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    overlayUrl: 'https://{s}.tile.openrailwaymap.org/standard/{z}/{x}/{y}.png',
+    attribution: '&copy; <a href="https://www.openrailwaymap.org/">OpenRailwayMap</a> &copy; OpenStreetMap',
+    badge: 'RAILWAY INFRASTRUCTURE',
+    description: 'Official OpenRailwayMap layer showing real railway tracks, switches, signals & catenary electrification.',
+  },
+  {
+    id: 'esri_satellite',
+    name: 'Esri Satellite Imagery',
+    tileUrl: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+    badge: 'AERIAL SATELLITE',
+    description: 'High-resolution satellite view of Indian Railways tracks, stations and geographical terrain.',
+  },
+  {
+    id: 'osm_standard',
+    name: 'OpenStreetMap Geographic',
+    tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    badge: 'STREET & RAIL',
+    description: 'Standard OpenStreetMap geographic vector presentation.',
+  },
+  {
+    id: 'schematic',
+    name: 'Schematic Topological View',
+    badge: 'SVG TOPOLOGY',
+    description: 'Clean vector schematic corridor diagram.',
+  },
+];
+
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 
-export function GisCorridorMap({ stations = [], trains = [], tasks = [], planItems = [] }: GisCorridorMapProps) {
-  const [selectedEntity, setSelectedEntity] = useState<{ type: string; data: any } | null>(null);
-  const [activeLayers, setActiveLayers] = useState({ trains: true, blocks: true, stations: true });
-  const [tick, setTick] = useState(0);
-  const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
+// Line interpolation between geographic lat/lng coordinates
+function interpolatePath(points: [number, number][], t: number): [number, number] {
+  if (points.length < 2) return points[0] || [28.6431, 77.2197];
+  const numSegments = points.length - 1;
+  const scaledT = Math.max(0, Math.min(1, t)) * numSegments;
+  const index = Math.floor(scaledT);
+  const localT = scaledT - index;
+  const p1 = points[Math.min(index, points.length - 1)];
+  const p2 = points[Math.min(index + 1, points.length - 1)];
+  return [lerp(p1[0], p2[0], localT), lerp(p1[1], p2[1], localT)];
+}
 
-  // Animate trains along tracks every 2s
+export function GisCorridorMap({ stations = [], trains = [], tasks = [], planItems = [] }: GisCorridorMapProps) {
+  const [activeProvider, setActiveProvider] = useState<MapProvider>('cartodb_dark');
+  const [selectedEntity, setSelectedEntity] = useState<{ type: string; data: any } | null>(null);
+  const [activeLayers, setActiveLayers] = useState({
+    trains: true,
+    blocks: true,
+    stations: true,
+    tracks: true,
+    railOverlay: true,
+  });
+  const [tick, setTick] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const leafletMapRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const overlayLayerRef = useRef<L.TileLayer | null>(null);
+  const layerGroupRef = useRef<L.LayerGroup | null>(null);
+
+  // Train animation ticker (updates live position offset every 2 seconds)
   useEffect(() => {
-    animRef.current = setInterval(() => setTick(t => t + 1), 2000);
-    return () => { if (animRef.current) clearInterval(animRef.current); };
+    const timer = setInterval(() => setTick(t => t + 1), 2000);
+    return () => clearInterval(timer);
   }, []);
 
-  // Compute train position on track (animated lerp offset)
-  const getTrainPos = (train: TrainSchedule, index: number) => {
-    const sectionId = train.section_id;
-    const corridor = CORRIDORS.find(c => c.id === sectionId) ||
-                     CORRIDORS.find(c => c.id === TRAIN_SECTION_MAP[sectionId]) ||
-                     CORRIDORS[index % CORRIDORS.length];
-    const fromSt = STATION_LAYOUT[corridor.from];
-    const toSt   = STATION_LAYOUT[corridor.to];
-    if (!fromSt || !toSt) return { x: 50, y: 50, color: '#10b981', corridor };
+  // Filter entities by search query
+  const filteredTrains = useMemo(() => {
+    if (!searchQuery.trim()) return trains;
+    const q = searchQuery.toLowerCase();
+    return trains.filter(t =>
+      t.train_number.toLowerCase().includes(q) ||
+      t.train_name.toLowerCase().includes(q) ||
+      t.section_id.toLowerCase().includes(q)
+    );
+  }, [trains, searchQuery]);
 
-    // Spread multiple trains on the same corridor
-    const trainsOnCorridor = trains.filter((t, i) => {
-      const c = CORRIDORS.find(c2 => c2.id === t.section_id) ||
-                CORRIDORS.find(c2 => c2.id === TRAIN_SECTION_MAP[t.section_id]) ||
-                CORRIDORS[i % CORRIDORS.length];
-      return c.id === corridor.id;
-    });
-    const posInCorridor = trainsOnCorridor.findIndex(t => t.id === train.id);
-    const baseT = ((tick * 0.08 + posInCorridor * 0.2) % 0.85) + 0.07;
+  const filteredTasks = useMemo(() => {
+    if (!searchQuery.trim()) return tasks;
+    const q = searchQuery.toLowerCase();
+    return tasks.filter(t =>
+      t.external_id.toLowerCase().includes(q) ||
+      t.defect_type.toLowerCase().includes(q) ||
+      t.section_id.toLowerCase().includes(q) ||
+      t.asset_id.toLowerCase().includes(q)
+    );
+  }, [tasks, searchQuery]);
 
-    const color = TRAIN_COLORS[train.train_type] || '#10b981';
-    return {
-      x: lerp(fromSt.x, toSt.x, baseT),
-      y: lerp(fromSt.y, toSt.y, baseT) + (posInCorridor % 2 === 0 ? -1.5 : 1.5),
-      color,
-      corridor,
-    };
-  };
+  // ── Initialize & Manage Leaflet Map Instance ──────────────────────────────
+  useEffect(() => {
+    if (activeProvider === 'schematic') return;
+    if (!mapContainerRef.current) return;
 
-  // Place maintenance block zones midway along their corridor
-  const getBlockPos = (task: MaintenanceTask, index: number) => {
-    const sectionId = task.section_id;
-    const corridor = CORRIDORS.find(c => c.id === sectionId) ||
-                     CORRIDORS.find(c => c.id === TRAIN_SECTION_MAP[sectionId]) ||
-                     CORRIDORS[index % CORRIDORS.length];
-    const fromSt = STATION_LAYOUT[corridor.from];
-    const toSt   = STATION_LAYOUT[corridor.to];
-    if (!fromSt || !toSt) return { x: 50, y: 50 };
+    if (!leafletMapRef.current) {
+      // Center map around Delhi-NCR / UP railway corridor
+      const map = L.map(mapContainerRef.current, {
+        center: [27.8, 78.5],
+        zoom: 7,
+        zoomControl: false,
+        attributionControl: false,
+      });
 
-    const tasksOnSection = tasks.filter(t => t.section_id === sectionId);
-    const pos = tasksOnSection.findIndex(t => t.id === task.id);
-    const t = 0.35 + pos * 0.12;
+      L.control.zoom({ position: 'topright' }).addTo(map);
+      layerGroupRef.current = L.layerGroup().addTo(map);
+      leafletMapRef.current = map;
+    }
 
-    return {
-      x: lerp(fromSt.x, toSt.x, t),
-      y: lerp(fromSt.y, toSt.y, t) + (pos % 2 === 0 ? 4 : -4),
-    };
+    const map = leafletMapRef.current;
+    const selectedOption = MAP_PROVIDERS.find(p => p.id === activeProvider) || MAP_PROVIDERS[0];
+
+    // Remove existing tile layers
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+      tileLayerRef.current = null;
+    }
+    if (overlayLayerRef.current) {
+      map.removeLayer(overlayLayerRef.current);
+      overlayLayerRef.current = null;
+    }
+
+    // Add main tile layer
+    if (selectedOption.tileUrl) {
+      tileLayerRef.current = L.tileLayer(selectedOption.tileUrl, {
+        maxZoom: 19,
+        subdomains: 'abcd',
+      }).addTo(map);
+    }
+
+    // Add secondary overlay layer (e.g. OpenRailwayMap signal layer)
+    if (selectedOption.overlayUrl && activeLayers.railOverlay) {
+      overlayLayerRef.current = L.tileLayer(selectedOption.overlayUrl, {
+        maxZoom: 19,
+        subdomains: 'a',
+        opacity: 0.85,
+      }).addTo(map);
+    }
+
+    map.invalidateSize();
+  }, [activeProvider, activeLayers.railOverlay]);
+
+  // ── Render Leaflet Map Layers (Tracks, Stations, Possessions, Animated Trains)
+  useEffect(() => {
+    if (activeProvider === 'schematic') return;
+    const map = leafletMapRef.current;
+    const group = layerGroupRef.current;
+    if (!map || !group) return;
+
+    group.clearLayers();
+
+    // 1. Render Track Polylines
+    if (activeLayers.tracks) {
+      CORRIDORS_GEO.forEach(corridor => {
+        const polyline = L.polyline(corridor.pathLat5, {
+          color: corridor.color,
+          weight: 4,
+          opacity: 0.8,
+          dashArray: '6, 6',
+        });
+        polyline.bindTooltip(`<b>${corridor.label}</b><br/>Section ID: ${corridor.id}`, {
+          className: 'leaflet-custom-tooltip',
+        });
+        group.addLayer(polyline);
+      });
+    }
+
+    // 2. Render Station Node Markers
+    if (activeLayers.stations) {
+      Object.values(REAL_STATIONS).forEach(st => {
+        const iconHtml = `
+          <div class="relative flex items-center justify-center">
+            <div class="w-5 h-5 rounded-full bg-blue-500/20 border border-blue-400 animate-ping absolute"></div>
+            <div class="w-3.5 h-3.5 rounded-full bg-navy-950 border-2 border-blue-400 flex items-center justify-center">
+              <div class="w-1.5 h-1.5 rounded-full bg-blue-400"></div>
+            </div>
+            <div class="absolute top-5 whitespace-nowrap bg-navy-950/90 text-gray-200 border border-blue-500/40 px-1.5 py-0.5 rounded text-[9px] font-bold shadow-md">
+              ${st.code}
+            </div>
+          </div>
+        `;
+
+        const customIcon = L.divIcon({
+          html: iconHtml,
+          className: 'custom-station-icon',
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        });
+
+        const marker = L.marker([st.lat, st.lng], { icon: customIcon });
+        marker.on('click', () => setSelectedEntity({ type: 'station', data: st }));
+        group.addLayer(marker);
+      });
+    }
+
+    // 3. Render Scheduled Maintenance Block Possession Circles
+    if (activeLayers.blocks) {
+      planItems.forEach((item, idx) => {
+        const task = filteredTasks.find(t => t.id === item.task_id);
+        if (!task) return;
+        const sectionId = task.section_id;
+        const corridor = CORRIDORS_GEO.find(c => c.id === sectionId) || CORRIDORS_GEO[idx % CORRIDORS_GEO.length];
+        const dept = DEPT_COLORS[task.department] || DEPT_COLORS.ENGG;
+
+        const tasksOnSection = filteredTasks.filter(t => t.section_id === sectionId);
+        const posIndex = tasksOnSection.findIndex(t => t.id === task.id);
+        const tOffset = 0.35 + (posIndex >= 0 ? posIndex : 0) * 0.15;
+        const blockPos = interpolatePath(corridor.pathLat5, tOffset % 0.85);
+
+        const circle = L.circle(blockPos, {
+          radius: 12000, // 12km safety buffer
+          color: dept.stroke,
+          fillColor: dept.stroke,
+          fillOpacity: 0.25,
+          weight: 2,
+          dashArray: '4, 4',
+        });
+
+        const blockIconHtml = `
+          <div class="relative flex items-center justify-center">
+            <div class="w-6 h-6 rounded-full bg-amber-500/30 border border-amber-400 animate-pulse absolute"></div>
+            <div class="px-1.5 py-0.5 bg-navy-950 text-amber-300 border border-amber-500/50 rounded text-[9px] font-mono font-bold">
+              ⚡ ${task.external_id}
+            </div>
+          </div>
+        `;
+        const blockIcon = L.divIcon({
+          html: blockIconHtml,
+          className: 'custom-block-icon',
+          iconSize: [40, 20],
+          iconAnchor: [20, 10],
+        });
+
+        const marker = L.marker(blockPos, { icon: blockIcon });
+        marker.on('click', () => setSelectedEntity({ type: 'block', data: { task, item } }));
+        group.addLayer(circle);
+        group.addLayer(marker);
+      });
+    }
+
+    // 4. Render Live Animated Train GPS Markers
+    if (activeLayers.trains) {
+      filteredTrains.forEach((train, idx) => {
+        const sectionId = train.section_id;
+        const corridor = CORRIDORS_GEO.find(c => c.id === sectionId) ||
+                         CORRIDORS_GEO.find(c => c.id === TRAIN_SECTION_MAP[sectionId]) ||
+                         CORRIDORS_GEO[idx % CORRIDORS_GEO.length];
+
+        const trainsOnCorridor = filteredTrains.filter(t => {
+          const c = CORRIDORS_GEO.find(c2 => c2.id === t.section_id) ||
+                    CORRIDORS_GEO.find(c2 => c2.id === TRAIN_SECTION_MAP[t.section_id]) ||
+                    CORRIDORS_GEO[idx % CORRIDORS_GEO.length];
+          return c.id === corridor.id;
+        });
+
+        const posInCorridor = trainsOnCorridor.findIndex(t => t.id === train.id);
+        const baseT = ((tick * 0.05 + (posInCorridor >= 0 ? posInCorridor : 0) * 0.25) % 0.8) + 0.1;
+        const trainPos = interpolatePath(corridor.pathLat5, baseT);
+
+        const color = TRAIN_COLORS[train.train_type] || '#10b981';
+        const isPremium = train.train_type === 'PASSENGER_PREMIUM';
+
+        const iconHtml = `
+          <div class="relative flex items-center justify-center" style="cursor:pointer">
+            <div class="w-6 h-6 rounded-full opacity-40 animate-ping absolute" style="background-color: ${color}"></div>
+            <div class="px-2 py-0.5 rounded-full bg-navy-950 border flex items-center gap-1 shadow-lg" style="border-color: ${color}">
+              <div class="w-2 h-2 rounded-full" style="background-color: ${color}"></div>
+              <span class="text-[9px] font-mono font-bold text-gray-100">🚆 ${train.train_number}</span>
+            </div>
+          </div>
+        `;
+
+        const trainIcon = L.divIcon({
+          html: iconHtml,
+          className: 'custom-train-icon',
+          iconSize: [60, 24],
+          iconAnchor: [30, 12],
+        });
+
+        const marker = L.marker(trainPos, { icon: trainIcon });
+        marker.on('click', () => setSelectedEntity({ type: 'train', data: train }));
+        group.addLayer(marker);
+      });
+    }
+  }, [activeProvider, activeLayers, filteredTrains, filteredTasks, planItems, tick]);
+
+  // Fit Leaflet map bounds to station network
+  const handleFitBounds = () => {
+    if (!leafletMapRef.current) return;
+    const coords = Object.values(REAL_STATIONS).map(s => [s.lat, s.lng] as [number, number]);
+    leafletMapRef.current.fitBounds(L.latLngBounds(coords), { padding: [40, 40] });
   };
 
   return (
-    <div className="rounded-xl overflow-hidden border border-surface-border shadow-2xl" style={{ background: 'linear-gradient(135deg, #060d1f 0%, #0b1329 60%, #0d1833 100%)' }}>
+    <div className="rounded-xl overflow-hidden border border-surface-border shadow-2xl bg-navy-900">
 
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="px-5 py-3 border-b border-surface-border/70 flex flex-wrap items-center justify-between gap-3"
-           style={{ background: 'rgba(11,19,41,0.9)', backdropFilter: 'blur(8px)' }}>
+      {/* ── Top Header Toolbar ────────────────────────────────────────────── */}
+      <div className="px-5 py-3 border-b border-surface-border/70 flex flex-wrap items-center justify-between gap-3 bg-navy-950/90 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center">
             <Compass className="w-4 h-4 text-cyan-400" />
@@ -136,256 +438,189 @@ export function GisCorridorMap({ stations = [], trains = [], tasks = [], planIte
               </span>
             </div>
             <p className="text-[10px] text-gray-500 mt-0.5">
-              Northern Railway — Delhi Division Corridor Track Topology with Live Operations
+              Northern Railway — Delhi Division Corridor Geographic Topology with Real-Time Operations
             </p>
           </div>
         </div>
 
-        {/* Layer toggles */}
-        <div className="flex items-center gap-2">
-          {[
-            { key: 'trains',   icon: Train,      label: `Trains (${trains.length})`,        color: 'emerald' },
-            { key: 'blocks',   icon: Zap,         label: `Blocks (${planItems.length})`,     color: 'amber' },
-            { key: 'stations', icon: MapPin,       label: `Stations (${Object.keys(STATION_LAYOUT).length})`, color: 'blue' },
-          ].map(({ key, icon: Icon, label, color }) => {
-            const active = activeLayers[key as keyof typeof activeLayers];
-            return (
-              <button
-                key={key}
-                onClick={() => setActiveLayers(l => ({ ...l, [key]: !l[key as keyof typeof l] }))}
-                className={clsx(
-                  'flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[10px] font-bold transition-all',
-                  active
-                    ? color === 'emerald' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35'
-                    : color === 'amber'   ? 'bg-amber-500/15 text-amber-300 border-amber-500/35'
-                    : 'bg-blue-500/15 text-blue-300 border-blue-500/35'
-                    : 'bg-navy-900/50 text-gray-500 border-surface-border/40'
-                )}
-              >
-                <Icon className="w-3 h-3" /> {label}
-              </button>
-            );
-          })}
+        {/* Search bar & Controls */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-2" />
+            <input
+              type="text"
+              placeholder="Search train, station, task..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="bg-navy-900 border border-surface-border rounded-md pl-8 pr-3 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-cyan-500 w-44"
+            />
+          </div>
+
+          {/* Map Provider Selector */}
+          <div className="relative group">
+            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-navy-800 border border-surface-border text-xs font-bold text-gray-200 hover:border-cyan-500 transition-all">
+              <Globe className="w-3.5 h-3.5 text-cyan-400" />
+              <span>{MAP_PROVIDERS.find(p => p.id === activeProvider)?.name.split(' ')[0]}</span>
+            </button>
+            <div className="absolute right-0 top-full mt-1 w-64 p-2 bg-navy-950 border border-surface-border rounded-lg shadow-2xl z-50 hidden group-hover:block space-y-1">
+              <p className="text-[9px] uppercase font-bold text-gray-400 px-2 py-1">Select Map API Engine</p>
+              {MAP_PROVIDERS.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => setActiveProvider(p.id)}
+                  className={clsx(
+                    'w-full text-left px-2.5 py-2 rounded-md transition-all flex flex-col gap-0.5',
+                    activeProvider === p.id
+                      ? 'bg-cyan-500/15 border border-cyan-500/30 text-cyan-300'
+                      : 'hover:bg-navy-900 text-gray-300'
+                  )}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>{p.name}</span>
+                    <span className="text-[8px] px-1 py-0.5 rounded bg-surface-subtle text-gray-400 font-mono">{p.badge}</span>
+                  </div>
+                  <p className="text-[9px] text-gray-500 leading-tight">{p.description}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Layer toggles */}
+          <div className="flex items-center gap-1 bg-navy-900 border border-surface-border/60 rounded-md p-0.5">
+            {[
+              { key: 'trains',   icon: Train,      label: `Trains (${filteredTrains.length})`,    color: 'emerald' },
+              { key: 'blocks',   icon: Zap,         label: `Blocks (${planItems.length})`, color: 'amber' },
+              { key: 'stations', icon: MapPin,       label: `Stations (${Object.keys(REAL_STATIONS).length})`, color: 'blue' },
+            ].map(({ key, icon: Icon, label, color }) => {
+              const active = activeLayers[key as keyof typeof activeLayers];
+              return (
+                <button
+                  key={key}
+                  onClick={() => setActiveLayers(l => ({ ...l, [key]: !l[key as keyof typeof l] }))}
+                  className={clsx(
+                    'flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold transition-all',
+                    active
+                      ? color === 'emerald' ? 'bg-emerald-500/20 text-emerald-300'
+                      : color === 'amber'   ? 'bg-amber-500/20 text-amber-300'
+                      : 'bg-blue-500/20 text-blue-300'
+                      : 'text-gray-500 hover:text-gray-300'
+                  )}
+                >
+                  <Icon className="w-3 h-3" /> {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {activeProvider !== 'schematic' && (
+            <button
+              onClick={handleFitBounds}
+              className="p-1.5 rounded-md bg-navy-800 border border-surface-border text-gray-300 hover:text-white"
+              title="Reset Bounds"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* ── Main SVG Map Canvas ─────────────────────────────────────────── */}
-      <div className="relative" style={{ height: 480 }}>
-        <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
-          <defs>
-            {/* Grid pattern */}
-            <pattern id="mapGrid" x="0" y="0" width="5" height="5" patternUnits="userSpaceOnUse">
-              <path d="M 5 0 L 0 0 0 5" fill="none" stroke="rgba(59,130,246,0.07)" strokeWidth="0.15"/>
-            </pattern>
-            {/* Glow filters */}
-            <filter id="trainGlow" x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation="0.5" result="blur"/>
-              <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-            </filter>
-            <filter id="stationGlow" x="-60%" y="-60%" width="220%" height="220%">
-              <feGaussianBlur stdDeviation="0.8" result="blur"/>
-              <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-            </filter>
-            {/* Track gradient */}
-            <linearGradient id="trackUp" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.9"/>
-              <stop offset="100%" stopColor="#6366f1" stopOpacity="0.9"/>
-            </linearGradient>
-          </defs>
+      {/* ── Main Map Canvas Container ───────────────────────────────────── */}
+      <div className="relative" style={{ height: 500 }}>
+        {activeProvider === 'schematic' ? (
+          /* ── Interactive SVG Topological Schematic Diagram Mode ────── */
+          <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <defs>
+              <pattern id="mapGrid" x="0" y="0" width="5" height="5" patternUnits="userSpaceOnUse">
+                <path d="M 5 0 L 0 0 0 5" fill="none" stroke="rgba(59,130,246,0.07)" strokeWidth="0.15"/>
+              </pattern>
+            </defs>
 
-          {/* Background grid */}
-          <rect width="100" height="100" fill="url(#mapGrid)"/>
+            <rect width="100" height="100" fill="#060d1f"/>
+            <rect width="100" height="100" fill="url(#mapGrid)"/>
 
-          {/* Subtle vignette */}
-          <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
-            <stop offset="0%" stopColor="transparent"/>
-            <stop offset="100%" stopColor="rgba(6,13,31,0.5)"/>
-          </radialGradient>
-          <rect width="100" height="100" fill="url(#vignette)"/>
+            {/* Schematic track lines */}
+            {CORRIDORS_GEO.map(corridor => {
+              const fromSt = REAL_STATIONS[corridor.from];
+              const toSt   = REAL_STATIONS[corridor.to];
+              if (!fromSt || !toSt) return null;
+              return (
+                <g key={corridor.id}>
+                  <line
+                    x1={fromSt.xSvg} y1={fromSt.ySvg} x2={toSt.xSvg} y2={toSt.ySvg}
+                    stroke={corridor.color} strokeWidth="1.2" strokeOpacity="0.25"
+                  />
+                  <line
+                    x1={fromSt.xSvg} y1={fromSt.ySvg} x2={toSt.xSvg} y2={toSt.ySvg}
+                    stroke={corridor.color} strokeWidth="0.5" strokeOpacity="0.9" strokeDasharray="2 1"
+                  />
+                  <text
+                    x={(fromSt.xSvg + toSt.xSvg) / 2}
+                    y={(fromSt.ySvg + toSt.ySvg) / 2 - 2}
+                    textAnchor="middle"
+                    fill={corridor.color}
+                    fontSize="1.5"
+                    fontFamily="monospace"
+                    fontWeight="bold"
+                  >
+                    {corridor.label}
+                  </text>
+                </g>
+              );
+            })}
 
-          {/* ── Track Corridor Lines ─────────────────────────────────── */}
-          {CORRIDORS.map(corridor => {
-            const fromSt = STATION_LAYOUT[corridor.from];
-            const toSt   = STATION_LAYOUT[corridor.to];
-            if (!fromSt || !toSt) return null;
-            return (
-              <g key={corridor.id}>
-                {/* Track glow */}
-                <line
-                  x1={fromSt.x} y1={fromSt.y} x2={toSt.x} y2={toSt.y}
-                  stroke={corridor.color} strokeWidth="1.4" strokeOpacity="0.25"
-                  strokeLinecap="round"
-                />
-                {/* Main track */}
-                <line
-                  x1={fromSt.x} y1={fromSt.y} x2={toSt.x} y2={toSt.y}
-                  stroke={corridor.color} strokeWidth="0.55" strokeOpacity="0.9"
-                  strokeDasharray="2.5 1.2" strokeLinecap="round"
-                />
-                {/* Corridor label at midpoint */}
-                <text
-                  x={(fromSt.x + toSt.x) / 2}
-                  y={(fromSt.y + toSt.y) / 2 - 2.5}
-                  textAnchor="middle"
-                  fill={corridor.color}
-                  fontSize="1.5"
-                  fontFamily="monospace"
-                  fontWeight="bold"
-                  opacity="0.7"
-                >
-                  {corridor.label}
+            {/* Stations */}
+            {Object.values(REAL_STATIONS).map(st => (
+              <g key={st.code} onClick={() => setSelectedEntity({ type: 'station', data: st })} style={{ cursor: 'pointer' }}>
+                <circle cx={st.xSvg} cy={st.ySvg} r="2" fill="#0b1329" stroke="#60a5fa" strokeWidth="0.4"/>
+                <circle cx={st.xSvg} cy={st.ySvg} r="0.8" fill="#60a5fa"/>
+                <text x={st.xSvg} y={st.ySvg - 3.5} textAnchor="middle" fill="#e2e8f0" fontSize="1.6" fontWeight="bold">
+                  {st.name} ({st.code})
                 </text>
               </g>
-            );
-          })}
+            ))}
+          </svg>
+        ) : (
+          /* ── Leaflet Geographic Canvas ────────────────────────────── */
+          <div ref={mapContainerRef} className="w-full h-full bg-navy-950" />
+        )}
 
-          {/* ── Maintenance Block Possession Zones ──────────────────── */}
-          {activeLayers.blocks && planItems.map((item, idx) => {
-            const task = tasks.find(t => t.id === item.task_id);
-            if (!task) return null;
-            const pos = getBlockPos(task, idx);
-            const dept = DEPT_COLORS[task.department] || DEPT_COLORS.ENGG;
-            return (
-              <g
-                key={item.task_id}
-                onClick={() => setSelectedEntity({ type: 'block', data: { task, item } })}
-                style={{ cursor: 'pointer' }}
-              >
-                {/* Pulsing zone circle */}
-                <circle cx={pos.x} cy={pos.y} r="3.5" fill={dept.fill} stroke={dept.stroke} strokeWidth="0.35">
-                  <animate attributeName="r" values="3.5;4.5;3.5" dur="2s" repeatCount="indefinite"/>
-                  <animate attributeName="stroke-opacity" values="0.9;0.4;0.9" dur="2s" repeatCount="indefinite"/>
-                </circle>
-                <circle cx={pos.x} cy={pos.y} r="1.2" fill={dept.stroke}/>
-                {/* Block label */}
-                <rect x={pos.x - 4} y={pos.y + 4.5} width="8" height="3" rx="0.6"
-                  fill="rgba(11,19,41,0.85)" stroke={dept.stroke} strokeWidth="0.2"/>
-                <text x={pos.x} y={pos.y + 6.3} textAnchor="middle" fill={dept.stroke}
-                  fontSize="1.4" fontFamily="monospace" fontWeight="bold">
-                  {task.external_id}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* ── Live Train GPS Markers ───────────────────────────────── */}
-          {activeLayers.trains && trains.map((train, idx) => {
-            const pos = getTrainPos(train, idx);
-            const isPremium = train.train_type === 'PASSENGER_PREMIUM';
-            const isFreight = train.train_type.startsWith('FREIGHT');
-            return (
-              <g
-                key={train.id}
-                onClick={() => setSelectedEntity({ type: 'train', data: train })}
-                style={{ cursor: 'pointer' }}
-                filter="url(#trainGlow)"
-              >
-                {/* Speed trail */}
-                <circle cx={pos.x - 1.2} cy={pos.y} r={isPremium ? 1.0 : 0.7}
-                  fill={pos.color} opacity="0.2"/>
-                <circle cx={pos.x - 2.2} cy={pos.y} r={isPremium ? 0.6 : 0.3}
-                  fill={pos.color} opacity="0.08"/>
-                {/* Main marker */}
-                <circle cx={pos.x} cy={pos.y} r={isPremium ? 1.8 : isFreight ? 1.4 : 1.6}
-                  fill={`${pos.color}30`} stroke={pos.color} strokeWidth="0.3"/>
-                <circle cx={pos.x} cy={pos.y} r={isPremium ? 0.9 : 0.7} fill={pos.color}/>
-                {/* Train label */}
-                <rect x={pos.x - 5} y={pos.y + 2.2} width="10" height="3.2" rx="0.7"
-                  fill="rgba(11,19,41,0.9)" stroke={pos.color} strokeWidth="0.2"/>
-                <text x={pos.x} y={pos.y + 4.2} textAnchor="middle" fill={pos.color}
-                  fontSize="1.4" fontFamily="monospace" fontWeight="bold">
-                  🚆 {train.train_number}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* ── Station Node Waypoints ───────────────────────────────── */}
-          {activeLayers.stations && Object.values(STATION_LAYOUT).map(st => (
-            <g
-              key={st.code}
-              onClick={() => {
-                const found = stations.find(s => s.code === st.code);
-                setSelectedEntity({ type: 'station', data: found || st });
-              }}
-              style={{ cursor: 'pointer' }}
-              filter="url(#stationGlow)"
-            >
-              {/* Outer ring */}
-              <circle cx={st.x} cy={st.y} r="3.2"
-                fill="rgba(59,130,246,0.12)" stroke="#3b82f6" strokeWidth="0.35" strokeDasharray="1 0.8"/>
-              {/* Inner dot */}
-              <circle cx={st.x} cy={st.y} r="1.5" fill="#0b1329" stroke="#60a5fa" strokeWidth="0.4"/>
-              <circle cx={st.x} cy={st.y} r="0.7" fill="#60a5fa"/>
-              {/* Station name — positioned to avoid overlap */}
-              <rect
-                x={st.x - (st.label.length * 0.75)}
-                y={st.y - 6.5}
-                width={st.label.length * 1.5 + 2}
-                height="3.5"
-                rx="0.7"
-                fill="rgba(11,19,41,0.88)"
-                stroke="rgba(96,165,250,0.4)"
-                strokeWidth="0.2"
-              />
-              <text
-                x={st.x - (st.label.length * 0.75) + (st.label.length * 1.5 + 2) / 2}
-                y={st.y - 4.3}
-                textAnchor="middle"
-                fill="#e2e8f0"
-                fontSize="1.7"
-                fontFamily="sans-serif"
-                fontWeight="bold"
-              >
-                {st.label}
-              </text>
-              <text x={st.x} y={st.y + 5.2} textAnchor="middle"
-                fill="#60a5fa" fontSize="1.3" fontFamily="monospace" fontWeight="bold">
-                {st.code}
-              </text>
-            </g>
-          ))}
-        </svg>
-
-        {/* ── Live status bar overlaid bottom-left ─────────────────── */}
-        <div className="absolute bottom-3 left-4 flex items-center gap-3">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-navy-950/90 border border-emerald-500/30 text-[10px] text-emerald-300 font-bold">
-            <Activity className="w-3 h-3 animate-pulse" />
-            {trains.length} Live Train GPS Feeds Active
+        {/* ── Overlay Status Bar ────────────────────────────────────────── */}
+        <div className="absolute bottom-3 left-4 z-20 flex items-center gap-3">
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-navy-950/90 border border-emerald-500/30 text-[10px] text-emerald-300 font-bold shadow-xl backdrop-blur-sm">
+            <Activity className="w-3 h-3 animate-pulse text-emerald-400" />
+            {filteredTrains.length} Live Train GPS Streams Active
           </div>
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-navy-950/90 border border-amber-500/30 text-[10px] text-amber-300 font-bold">
-            <Zap className="w-3 h-3" />
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-navy-950/90 border border-amber-500/30 text-[10px] text-amber-300 font-bold shadow-xl backdrop-blur-sm">
+            <Zap className="w-3 h-3 text-amber-400" />
             {planItems.length} Block Possessions Scheduled
           </div>
         </div>
 
-        {/* ── Zone legend ───────────────────────────────────────────── */}
-        <div className="absolute bottom-3 right-4 flex flex-col gap-1">
+        {/* ── Legend Overlay ────────────────────────────────────────────── */}
+        <div className="absolute bottom-3 right-4 z-20 bg-navy-950/90 border border-surface-border p-2.5 rounded-lg shadow-xl backdrop-blur-sm space-y-1">
+          <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest border-b border-surface-border/50 pb-1 mb-1">Legend</p>
           {Object.entries(DEPT_COLORS).map(([dept, c]) => (
             <div key={dept} className="flex items-center gap-1.5 text-[9px] font-bold">
               <div className="w-2 h-2 rounded-full" style={{ background: c.stroke }}/>
-              <span className="text-gray-400">{dept} — {c.label}</span>
+              <span className="text-gray-300">{dept} — {c.label}</span>
             </div>
           ))}
-          <div className="flex items-center gap-1.5 text-[9px] font-bold mt-0.5 border-t border-surface-border/40 pt-1">
+          <div className="flex items-center gap-1.5 text-[9px] font-bold pt-0.5">
             <div className="w-2 h-2 rounded-full bg-emerald-400"/>
-            <span className="text-gray-400">Vande Bharat / Rajdhani (Priority 1)</span>
+            <span className="text-gray-300">Vande Bharat / Rajdhani (#1)</span>
           </div>
           <div className="flex items-center gap-1.5 text-[9px] font-bold">
             <div className="w-2 h-2 rounded-full bg-pink-400"/>
-            <span className="text-gray-400">Freight Rakes</span>
+            <span className="text-gray-300">Freight Container / Coal Rake</span>
           </div>
         </div>
       </div>
 
-      {/* ── Corridor Stats Strip ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-5 border-t border-surface-border/50 divide-x divide-surface-border/50"
-           style={{ background: 'rgba(11,19,41,0.95)' }}>
-        {CORRIDORS.map(corridor => {
-          const sectionTrains = trains.filter(t => t.section_id === corridor.id ||
-            TRAIN_SECTION_MAP[t.section_id] === corridor.id);
-          const sectionTasks = tasks.filter(t => t.section_id === corridor.id ||
-            TRAIN_SECTION_MAP[t.section_id] === corridor.id);
+      {/* ── Section Quick Stats Strip ────────────────────────────────────── */}
+      <div className="grid grid-cols-5 border-t border-surface-border/50 divide-x divide-surface-border/50 bg-navy-950/95">
+        {CORRIDORS_GEO.map(corridor => {
+          const sectionTrains = filteredTrains.filter(t => t.section_id === corridor.id || TRAIN_SECTION_MAP[t.section_id] === corridor.id);
+          const sectionTasks = filteredTasks.filter(t => t.section_id === corridor.id || TRAIN_SECTION_MAP[t.section_id] === corridor.id);
           const hasCritical = sectionTasks.some(t => t.severity === 5);
           return (
             <div key={corridor.id} className="px-3 py-2.5">
@@ -403,11 +638,11 @@ export function GisCorridorMap({ stations = [], trains = [], tasks = [], planIte
         })}
       </div>
 
-      {/* ── Inspector Modal ───────────────────────────────────────────────── */}
+      {/* ── Detailed Inspector Modal ─────────────────────────────────────── */}
       {selectedEntity && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'rgba(6,13,31,0.75)', backdropFilter: 'blur(6px)' }}
+          style={{ background: 'rgba(6,13,31,0.8)', backdropFilter: 'blur(8px)' }}
           onClick={e => e.target === e.currentTarget && setSelectedEntity(null)}
         >
           <div className="bg-navy-900 border border-surface-border rounded-xl max-w-sm w-full p-5 shadow-2xl">
@@ -447,14 +682,9 @@ export function GisCorridorMap({ stations = [], trains = [], tasks = [], planIte
               )}
               {selectedEntity.type === 'station' && (
                 <div className="space-y-2 p-3 bg-navy-950/80 rounded-lg border border-surface-border">
-                  <p className="font-bold text-blue-300">{selectedEntity.data.name || selectedEntity.data.label}</p>
+                  <p className="font-bold text-blue-300">{selectedEntity.data.name}</p>
                   <p className="text-gray-400">Railway Zone: <span className="text-blue-400 font-bold">{selectedEntity.data.zone}</span></p>
-                  {selectedEntity.data.lat && (
-                    <p className="font-mono text-gray-400">GPS: {selectedEntity.data.lat.toFixed(4)}°N, {selectedEntity.data.lng.toFixed(4)}°E</p>
-                  )}
-                  <p className="text-gray-400">Active Section Trains: <span className="text-emerald-400 font-bold">
-                    {trains.filter(t => t.origin_station === selectedEntity.data.code || t.destination_station === selectedEntity.data.code).length}
-                  </span></p>
+                  <p className="font-mono text-gray-400">GPS: {selectedEntity.data.lat}°N, {selectedEntity.data.lng}°E</p>
                 </div>
               )}
               {selectedEntity.type === 'block' && (

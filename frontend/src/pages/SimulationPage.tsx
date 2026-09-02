@@ -204,6 +204,31 @@ export function SimulationPage() {
                 <SimMetric label="Horizon Shift" baseline={0} result={scenario.newWindowOffset} unit="min" worseBigger />
               </div>
 
+              {/* 24h Timeline Bar */}
+              <div className="space-y-2">
+                <p className="text-xs font-bold text-gray-300">Rolling Horizon Timeline (24h view)</p>
+                <div className="relative h-10 bg-navy-950 rounded-lg overflow-hidden border border-surface-border">
+                  {/* Committed zone (locked) */}
+                  <div className="absolute top-0 left-0 h-full bg-emerald-500/20 border-r-2 border-emerald-500" style={{ width: '8.3%' }}>
+                    <span className="absolute top-1 left-1 text-[9px] text-emerald-400 font-bold">LOCKED</span>
+                    <span className="absolute bottom-1 left-1 text-[9px] text-emerald-400">00:00–02:00</span>
+                  </div>
+                  {/* Original block */}
+                  <div className="absolute top-2 h-6 bg-rose-500/30 border border-rose-500/50 rounded" style={{ left: '8.33%', width: '4.17%' }}>
+                    <span className="absolute top-0.5 left-1 text-[8px] text-rose-300">ORIG</span>
+                  </div>
+                  {/* Replanned block */}
+                  <div className="absolute top-2 h-6 bg-rail-blue/40 border border-rail-blue/60 rounded animate-pulse" style={{ left: (8.33 + (scenario.newWindowOffset / 1440 * 100)).toFixed(1) + '%', width: '4.17%' }}>
+                    <span className="absolute top-0.5 left-1 text-[8px] text-rail-blue">NEW</span>
+                  </div>
+                  {/* Uncommitted zone label */}
+                  <span className="absolute top-1 right-2 text-[9px] text-cyan-400 font-bold">REPLANNED ZONE</span>
+                </div>
+                <div className="flex justify-between text-[9px] text-gray-600 font-mono">
+                  {['00:00','04:00','08:00','12:00','16:00','20:00','24:00'].map(t => <span key={t}>{t}</span>)}
+                </div>
+              </div>
+
               <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg flex items-center gap-3 text-emerald-300 text-xs">
                 <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
                 <div>
@@ -213,6 +238,24 @@ export function SimulationPage() {
                   </p>
                 </div>
               </div>
+
+              {/* Replanned items from API */}
+              {apiResult && apiResult.replanned_items.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-gray-300">Replanned Block Assignments ({apiResult.replanned_items.length} items)</p>
+                  <div className="max-h-40 overflow-y-auto space-y-1">
+                    {apiResult.replanned_items.slice(0, 5).map((item, i) => (
+                      <div key={i} className="flex items-center gap-3 p-2 bg-navy-950 rounded border border-surface-border/50 text-xs font-mono">
+                        <span className="text-cyan-400 font-bold">REPLANNED</span>
+                        <span className="text-gray-400">Task #{item.task_id}</span>
+                        <span className="text-gray-500">→</span>
+                        <span className="text-gray-300">{item.start_at.slice(11, 16)}–{item.end_at.slice(11, 16)}</span>
+                        <span className="text-gray-600 truncate flex-1">{item.rationale.slice(0, 40)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
