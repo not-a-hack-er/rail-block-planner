@@ -1,4 +1,4 @@
-# Rail Block Planner Backend
+# Rail Block Planner - scheduling MVP
 
 Hackathon-ready backend for SIH26027: it turns maintenance tasks plus available corridor windows into a **draft** block plan. A planner reviews it, an authorised Senior DOM approves it, and only then can it be published.
 
@@ -19,7 +19,8 @@ This is a safe **MVP**, not a production railway control system. Real BDMS/COA w
 ## Run locally
 
 ```powershell
-cd outputs\rail-block-planner-backend
+git clone https://github.com/not-a-hack-er/rail-block-planner.git
+cd rail-block-planner
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -76,18 +77,6 @@ Matching window:
 ```
 
 Then send `{ "horizon":"WEEK", "starts_at":"2026-09-01T00:00:00Z", "ends_at":"2026-09-08T00:00:00Z" }` to the generate endpoint.
-
-## Upload to GitHub
-
-Create an empty GitHub repository, then run these commands from this project folder (replace the URL):
-
-```powershell
-git add .
-git commit -m "Initial Rail Block Planner backend"
-git branch -M main
-git remote add origin https://github.com/YOUR-USERNAME/rail-block-planner-backend.git
-git push -u origin main
-```
 
 ## Project map
 
